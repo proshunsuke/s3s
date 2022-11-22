@@ -4,11 +4,13 @@
 # https://github.com/frozenpandaman/s3s
 # License: GPLv3
 
-import argparse, datetime, json, os, shutil, re, requests, sys, time, uuid
+import argparse, base64, datetime, json, os, shutil, re, requests, sys, time, uuid
+from subprocess import call
 import msgpack
+from packaging import version
 import iksm, utils
 
-A_VERSION = "0.1.11"
+A_VERSION = "0.1.19"
 
 DEBUG = False
 
@@ -191,6 +193,9 @@ def fetch_json(which, separate=False, exportall=False, specific=False, numbers_o
 		prefetch_checks(printout)
 		if DEBUG:
 			print("* prefetch_checks() succeeded")
+	else:
+		if DEBUG:
+			print("* skipping prefetch_checks()")
 	swim()
 
 	ink_list, salmon_list = [], []
@@ -339,10 +344,43 @@ def update_salmon_profile():
 	# 	print(updateprofile.text)
 
 
+def populate_gear_abilities(player):
+	'''Returns string representing all 12 ability slots for the player's gear, for use in set_scoreboard().'''
+
+	h_main = utils.translate_gear_ability(player["headGear"]["primaryGearPower"]["image"]["url"])
+	h_subs = []
+	if len(player["headGear"]["additionalGearPowers"]) > 0:
+		h_subs.append(utils.translate_gear_ability(player["headGear"]["additionalGearPowers"][0]["image"]["url"]))
+	if len(player["headGear"]["additionalGearPowers"]) > 1:
+		h_subs.append(utils.translate_gear_ability(player["headGear"]["additionalGearPowers"][1]["image"]["url"]))
+	if len(player["headGear"]["additionalGearPowers"]) > 2:
+		h_subs.append(utils.translate_gear_ability(player["headGear"]["additionalGearPowers"][2]["image"]["url"]))
+
+	c_main = utils.translate_gear_ability(player["clothingGear"]["primaryGearPower"]["image"]["url"])
+	c_subs = []
+	if len(player["clothingGear"]["additionalGearPowers"]) > 0:
+		c_subs.append(utils.translate_gear_ability(player["clothingGear"]["additionalGearPowers"][0]["image"]["url"]))
+	if len(player["clothingGear"]["additionalGearPowers"]) > 1:
+		c_subs.append(utils.translate_gear_ability(player["clothingGear"]["additionalGearPowers"][1]["image"]["url"]))
+	if len(player["clothingGear"]["additionalGearPowers"]) > 2:
+		c_subs.append(utils.translate_gear_ability(player["clothingGear"]["additionalGearPowers"][2]["image"]["url"]))
+
+	s_main = utils.translate_gear_ability(player["shoesGear"]["primaryGearPower"]["image"]["url"])
+	s_subs = []
+	if len(player["shoesGear"]["additionalGearPowers"]) > 0:
+		s_subs.append(utils.translate_gear_ability(player["shoesGear"]["additionalGearPowers"][0]["image"]["url"]))
+	if len(player["shoesGear"]["additionalGearPowers"]) > 1:
+		s_subs.append(utils.translate_gear_ability(player["shoesGear"]["additionalGearPowers"][1]["image"]["url"]))
+	if len(player["shoesGear"]["additionalGearPowers"]) > 2:
+		s_subs.append(utils.translate_gear_ability(player["shoesGear"]["additionalGearPowers"][2]["image"]["url"]))
+
+	return h_main, h_subs, c_main, c_subs, s_main, s_subs
+
+
 def set_scoreboard(battle):
 	'''Returns two lists of player dictionaries, for our_team_players and their_team_players.'''
 
-	# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Post-v3-battle#player-structure
+	# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Battle-%EF%BC%8D-Post#player-structure
 	our_team_players, their_team_players = [], []
 
 	for i, player in enumerate(battle["myTeam"]["players"]):
@@ -363,7 +401,16 @@ def set_scoreboard(battle):
 			p_dict["kill"]           = p_dict["kill_or_assist"] - p_dict["assist"]
 			p_dict["death"]          = player["result"]["death"]
 			p_dict["special"]        = player["result"]["special"]
+			# noroshiTry
 			p_dict["disconnected"]   = "no"
+
+			# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Battle-%EF%BC%8D-Post#gears-structure
+			gear_struct = {"headgear": {}, "clothing": {}, "shoes": {}}
+			h_main, h_subs, c_main, c_subs, s_main, s_subs = populate_gear_abilities(player)
+			gear_struct["headgear"] = {"primary_ability": h_main, "secondary_abilities": h_subs}
+			gear_struct["clothing"] = {"primary_ability": c_main, "secondary_abilities": c_subs}
+			gear_struct["shoes"]    = {"primary_ability": s_main, "secondary_abilities": s_subs}
+			p_dict["gears"] = gear_struct
 		else:
 			p_dict["disconnected"]   = "yes"
 		our_team_players.append(p_dict)
@@ -386,7 +433,15 @@ def set_scoreboard(battle):
 			p_dict["kill"]           = p_dict["kill_or_assist"] - p_dict["assist"]
 			p_dict["death"]          = player["result"]["death"]
 			p_dict["special"]        = player["result"]["special"]
+			# noroshiTry
 			p_dict["disconnected"]   = "no"
+
+			gear_struct = {"headgear": {}, "clothing": {}, "shoes": {}}
+			h_main, h_subs, c_main, c_subs, s_main, s_subs = populate_gear_abilities(player)
+			gear_struct["headgear"] = {"primary_ability": h_main, "secondary_abilities": h_subs}
+			gear_struct["clothing"] = {"primary_ability": c_main, "secondary_abilities": c_subs}
+			gear_struct["shoes"]    = {"primary_ability": s_main, "secondary_abilities": s_subs}
+			p_dict["gears"] = gear_struct
 		else:
 			p_dict["disconnected"]   = "yes"
 		their_team_players.append(p_dict)
@@ -394,10 +449,10 @@ def set_scoreboard(battle):
 	return our_team_players, their_team_players
 
 
-def prepare_battle_result(battle, ismonitoring, overview_data=None):
+def prepare_battle_result(battle, ismonitoring, isblackout, overview_data=None):
 	'''Converts the Nintendo JSON format for a Turf War/Ranked battle to the stat.ink one.'''
 
-	# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Post-v3-battle
+	# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Battle-%EF%BC%8D-Post
 	payload = {}
 	battle = battle["vsHistoryDetail"]
 
@@ -443,32 +498,7 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 
 	## STAGE ##
 	###########
-	# hardcoded before first major game update
-	stage_id = utils.b64d(battle["vsStage"]["id"])
-	if stage_id == 1:
-		payload["stage"] = "gorge" # yunohana
-	elif stage_id == 2:
-		payload["stage"] = "alley" # gonzui
-	elif stage_id == 3:
-		payload["stage"] = "market" # yagara
-	elif stage_id == 4:
-		payload["stage"] = "spillway" # mategai
-	elif stage_id == 6:
-		payload["stage"] = "metalworks" # namero
-	elif stage_id == 10:
-		payload["stage"] = "bridge" # masaba
-	elif stage_id == 11:
-		payload["stage"] = "museum" # kinmedai
-	elif stage_id == 12:
-		payload["stage"] = "resort" # mahimahi
-	elif stage_id == 13:
-		payload["stage"] = "academy" # amabi
-	elif stage_id == 14:
-		payload["stage"] = "shipyard" # chozame
-	elif stage_id == 15:
-		payload["stage"] = "mart" # zatou
-	elif stage_id == 16:
-		payload["stage"] = "world" # sumeshi
+	payload["stage"] = utils.b64d(battle["vsStage"]["id"])
 
 	## WEAPON, K/D/A/S, TURF INKED ##
 	#################################
@@ -485,7 +515,7 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 				payload["kill"]           = payload["kill_or_assist"] - payload["assist"]
 				payload["death"]          = player["result"]["death"]
 				payload["special"]        = player["result"]["special"]
-				# ...        = player["result"]["noroshiTry"] = ultra signal attempts - splatfest
+				# ...        = player["result"]["noroshiTry"] = ultra signal attempts - splatfest tricolor tw
 				break
 
 	## RESULT ##
@@ -525,6 +555,8 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 		# if rule == "TRI_COLOR":
 			# ...
 
+		# no support for splatfest fest_title
+
 	# turf war only - not tricolor
 	if mode in ("REGULAR", "FEST"):
 		try:
@@ -558,7 +590,6 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 			pass
 
 	if mode == "BANKARA":
-
 		try:
 			payload["our_team_count"]   = battle["myTeam"]["result"]["score"]
 			payload["their_team_count"] = battle["otherTeams"][0]["result"]["score"]
@@ -567,6 +598,9 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 
 		payload["knockout"] = "no" if battle["knockout"] is None or battle["knockout"] == "NEITHER" else "yes"
 		payload["rank_exp_change"] = battle["bankaraMatch"]["earnedUdemaePoint"]
+
+		battle_id         = base64.b64decode(battle["id"]).decode('utf-8')
+		battle_id_mutated = battle_id.replace("BANKARA", "RECENT") # normalize the ID, make work with -M and -r
 
 		if overview_data is None: # no passed in file with -i
 			overview_post = requests.post(utils.GRAPHQL_URL,
@@ -589,7 +623,10 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 			for parent in ranked_list: # groups in overview (ranked) JSON/screen
 				for idx, child in enumerate(parent["historyDetails"]["nodes"]):
 
-					if child["id"] == battle["id"]: # found the battle ID in the other file
+					overview_battle_id         = base64.b64decode(child["id"]).decode('utf-8')
+					overview_battle_id_mutated = overview_battle_id.replace("BANKARA", "RECENT") # same battle, different screens
+
+					if overview_battle_id_mutated == battle_id_mutated: # found the battle ID in the other file
 
 						full_rank = re.split('([0-9]+)', child["udemae"].lower())
 						was_s_plus_before = len(full_rank) > 1 # true if "before" rank is s+
@@ -610,13 +647,11 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 							else:
 								payload["rank_up_battle"] = "no"
 
-							if parent["bankaraMatchChallenge"]["udemaeAfter"] is None:
-								payload["rank_after"] = payload["rank_before"]
-								if was_s_plus_before:
-									payload["rank_after_s_plus"] = payload["rank_before_s_plus"] # also s+ after
-							else:
+							if parent["bankaraMatchChallenge"]["udemaeAfter"] is not None:
 								if idx != 0:
 									payload["rank_after"] = payload["rank_before"]
+									if was_s_plus_before: # not a rank-up battle, so must be the same
+										payload["rank_after_s_plus"] = payload["rank_before_s_plus"]
 								else: # the battle where we actually ranked up
 									full_rank_after = re.split('([0-9]+)', parent["bankaraMatchChallenge"]["udemaeAfter"].lower())
 									payload["rank_after"] = full_rank_after[0]
@@ -663,15 +698,40 @@ def prepare_battle_result(battle, ismonitoring, overview_data=None):
 	# gear
 	# payload["image_gear"] = ...
 
-	# no way to get: level_beforea/after, cash_before/after, rank_after_exp
+	# no way to get: level_before/after, cash_before/after, rank_after_exp
 
 	payload["automated"] = "yes" # data was not manually entered!
+
+	if isblackout:
+		# fix payload
+		for player in payload["our_team_players"]:
+			if player["me"] == "no": # only black out others
+				player["name"] = None
+				player["number"] = None
+				player["splashtag_title"] = None
+		for player in payload["their_team_players"]:
+			player["name"] = None
+			player["number"] = None
+			player["splashtag_title"] = None
+
+		# fix battle json
+		for player in battle["myTeam"]["players"]:
+			if not player["isMyself"]: # only black out others
+				player["name"] = None
+				player["nameId"] = None
+				player["byname"] = None
+		for team in battle["otherTeams"]:
+			for player in team["players"]:
+				player["name"] = None
+				player["nameId"] = None
+				player["byname"] = None
+
 	payload["splatnet_json"] = json.dumps(battle)
 
 	return payload
 
 
-def prepare_job_result(battle, ismonitoring, overview_data=None):
+def prepare_job_result(battle, ismonitoring, isblackout, overview_data=None):
 	'''Converts the Nintendo JSON format for a Salmon Run job to the stat.ink one.'''
 
 	pass # stat.ink doesn't support SR yet
@@ -707,13 +767,13 @@ def post_result(data, ismonitoring, isblackout, istestrun, overview_data=None):
 	# filter down to one battle at a time
 	for i in range(len(results)):
 		if "vsHistoryDetail" in results[i]["data"]: # ink battle
-			payload = prepare_battle_result(results[i]["data"], ismonitoring, overview_data)
+			payload = prepare_battle_result(results[i]["data"], ismonitoring, isblackout, overview_data)
 		elif "coopHistoryDetail" in results[i]["data"]: # salmon run job
-			payload = prepare_job_result(results[i]["data"], ismonitoring, overview_data)
+			payload = prepare_job_result(results[i]["data"], ismonitoring, isblackout, overview_data)
 		else: # shouldn't happen
 			print("Ill-formatted JSON while uploading. Exiting.")
-			print('results[i]["data"]:')
-			print(results[i]["data"])
+			print('\nDebug info:')
+			print(json.dumps(results))
 			sys.exit(1)
 
 		if len(payload) == 0: # received blank payload from prepare_job_result() - skip unsupported battle
@@ -722,8 +782,6 @@ def post_result(data, ismonitoring, isblackout, istestrun, overview_data=None):
 		# should have been taken care of in fetch_json() but just in case...
 		if payload["lobby"] == "private" and utils.custom_key_exists("ignore_private", CONFIG_DATA):
 			continue
-
-		# TODO - isblackout stuff... for SR too
 
 		s3s_values = {'agent': '\u0073\u0033\u0073', 'agent_version': f'v{A_VERSION}'} # lol
 		s3s_values["agent_variables"] = {'Upload Mode': "Monitoring" if ismonitoring else "Manual"}
@@ -772,30 +830,32 @@ def post_result(data, ismonitoring, isblackout, istestrun, overview_data=None):
 def check_for_updates():
 	'''Checks the script version against the repo, reminding users to update if available.'''
 
-	# TODO
-	print('\033[3m' + "» While s3s is in beta, please update the script regularly via " \
-		'`\033[91m' + "git pull" + '\033[0m' + "`." + '\033[0m' + "\n")
-	# try:
-	# 	latest_script = requests.get("https://raw.githubusercontent.com/frozenpandaman/s3s/master/s3s.py")
-	# 	new_version = re.search(r'A_VERSION = "([\d.]*)"', latest_script.text).group(1)
-	# 	update_available = version.parse(new_version) > version.parse(A_VERSION)
-	# 	if update_available:
-	# 		print(f"\nThere is a new version (v{new_version}) available.", end='')
-	# 		if os.path.isdir(".git"):
-	# 			update_now = input("\nWould you like to update now? [Y/n] ")
-	# 			if update_now == "" or update_now[0].lower() == "y":
-	# 				FNULL = open(os.devnull, "w")
-	# 				call(["git", "checkout", "."], stdout=FNULL, stderr=FNULL)
-	# 				call(["git", "checkout", "master"], stdout=FNULL, stderr=FNULL)
-	# 				call(["git", "pull"], stdout=FNULL, stderr=FNULL)
-	# 				print(f"Successfully updated to v{new_version}. Please restart s3s.")
-	# 				return True
-	# 			else:
-	# 				print("Remember to update later with `git pull` to get the latest version.\n")
-	# 		else: # no git directory
-	# 			print(" Visit the site below to update:\nhttps://github.com/frozenpandaman/s3s\n")
-	# except: # if there's a problem connecting to github
-	# 	pass
+	try:
+		latest_script = requests.get("https://raw.githubusercontent.com/frozenpandaman/s3s/master/s3s.py")
+		new_version = re.search(r'A_VERSION = "([\d.]*)"', latest_script.text).group(1)
+		update_available = version.parse(new_version) > version.parse(A_VERSION)
+		if update_available:
+			print(f"\nThere is a new version (v{new_version}) available.", end='')
+			if os.path.isdir(".git"):
+				update_now = input("\nWould you like to update now? [Y/n] ")
+				if update_now == "" or update_now[0].lower() == "y":
+					FNULL = open(os.devnull, "w")
+					call(["git", "checkout", "."], stdout=FNULL, stderr=FNULL)
+					call(["git", "checkout", "master"], stdout=FNULL, stderr=FNULL)
+					call(["git", "pull"], stdout=FNULL, stderr=FNULL)
+					print(f"Successfully updated to v{new_version}. Please restart s3s.")
+					sys.exit(0)
+				else:
+					print("Please update to the latest version by running " \
+						'`\033[91m' + "git pull" + '\033[0m' \
+						"` as soon as possible.\n")
+			else: # no git directory
+				print(" Visit the site below to update:\nhttps://github.com/frozenpandaman/s3s\n")
+	except Exception as e: # if there's a problem connecting to github
+		print('\033[3m' + "» Couldn't connect to GitHub. Please update the script manually via " \
+			'`\033[91m' + "git pull" + '\033[0m' + "`." + '\033[0m' + "\n")
+		# print('\033[3m' + "» While s3s is in beta, please update the script regularly via " \
+		# 	'`\033[91m' + "git pull" + '\033[0m' + "`." + '\033[0m' + "\n")
 
 
 def check_statink_key():
@@ -845,7 +905,7 @@ def get_num_results(which):
 
 	noun = utils.set_noun(which)
 	try:
-		if which == "ink":
+		if which == "ink": # TODO update '150' numbers when x battles & league released
 			print("Note: 50 recent battles of each type (up to 150 total) may be uploaded by instead manually exporting data with " \
 				'\033[91m' + "-o" + '\033[0m' + ".\n")
 		n = int(input(f"Number of recent {noun} to upload (0-50)? "))
@@ -869,8 +929,8 @@ def get_num_results(which):
 		return n
 
 
-def fetch_and_upload_single_result(hash, noun, ismonitoring, isblackout, istestrun):
-	'''Perform a GraphQL request for a single vsResultId/coopResultId and call post_result().'''
+def fetch_and_upload_single_result(hash, noun, isblackout, istestrun):
+	'''Performs a GraphQL request for a single vsResultId/coopResultId and call post_result().'''
 
 	if noun in ("battles", "battle"):
 		dict_key  = "VsHistoryDetailQuery"
@@ -884,17 +944,18 @@ def fetch_and_upload_single_result(hash, noun, ismonitoring, isblackout, istestr
 			headers=headbutt(),
 			cookies=dict(_gtoken=GTOKEN))
 	result = json.loads(result_post.text)
-	post_result(result, ismonitoring, isblackout, istestrun)
+	post_result(result, False, isblackout, istestrun) # not monitoring mode
 
 
-def check_if_missing(which, ismonitoring, isblackout, istestrun):
-	'''Checks for unuploaded battles and uploads any that are found.'''
+def check_if_missing(which, isblackout, istestrun, skipprefetch):
+	'''Checks for unuploaded battles and uploads any that are found (-r flag).'''
 
 	noun = utils.set_noun(which)
 	print(f"Checking if there are previously-unuploaded {noun}...")
 
 	urls = []
-	# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Get-UUID-List-(for-s3s)
+	# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Battle-%EF%BC%8D-Get-UUID-List-(for-s3s)
+	# https://github.com/fetus-hina/stat.ink/wiki/Spl3-API:-Salmon-%EF%BC%8D-Get-UUID-List
 	if which in ("both", "ink"):
 		urls.append("https://stat.ink/api/v3/s3s/uuid-list") # max 200 entries
 	else:
@@ -918,7 +979,8 @@ def check_if_missing(which, ismonitoring, isblackout, istestrun):
 				sys.exit(1)
 
 			# ! fetch from online
-			splatnet_ids = fetch_json(which, specific=True, numbers_only=True) # 'specific' - check ALL possible battles
+			# specific - check ALL possible battles; printout - to show tokens are being checked at program start
+			splatnet_ids = fetch_json(which, specific=True, numbers_only=True, printout=True, skipprefetch=skipprefetch)
 
 			# same as code in -i section below...
 			for id in reversed(splatnet_ids):
@@ -935,7 +997,7 @@ def check_if_missing(which, ismonitoring, isblackout, istestrun):
 					printed = True
 					print(f"Previously-unuploaded {noun} detected. Uploading now...")
 
-				fetch_and_upload_single_result(id, noun, ismonitoring, isblackout, istestrun)
+				fetch_and_upload_single_result(id, noun, isblackout, istestrun)
 
 			if not printed:
 				print(f"No previously-unuploaded {noun} found.")
@@ -943,14 +1005,108 @@ def check_if_missing(which, ismonitoring, isblackout, istestrun):
 		noun = "jobs" # for second run through the loop
 		which = "salmon"
 
+def check_for_new_results(which, cached_battles, cached_jobs, battle_wins, battle_losses, battle_draws, splatfest_wins, splatfest_losses, splatfest_draws, mirror_matches, job_successes, job_failures, isblackout, istestrun):
+	'''Helper function for monitor_battles(), called every N seconds or when exiting.'''
 
-def monitor_battles(which, secs, isblackout, istestrun):
-	'''Monitors SplatNet endpoint(s) for changes (new results) and uploads them.'''
+	# ! fetch from online
+	# check only numbers (quicker); specific=False since checks recent (latest) only
+	ink_results, salmon_results = fetch_json(which, separate=True, numbers_only=True)
+	foundany = False
+
+	if which in ("both", "ink"):
+		for num in reversed(ink_results):
+			if num not in cached_battles:
+				# get the full battle data
+				result_post = requests.post(utils.GRAPHQL_URL,
+					data=utils.gen_graphql_body(utils.translate_rid["VsHistoryDetailQuery"], "vsResultId", num),
+					headers=headbutt(),
+					cookies=dict(_gtoken=GTOKEN))
+				result = json.loads(result_post.text)
+
+				if result["data"]["vsHistoryDetail"]["vsMode"]["mode"] == "PRIVATE" \
+				and utils.custom_key_exists("ignore_private", CONFIG_DATA):
+					pass
+				else:
+					foundany = True
+					if result["data"]["vsHistoryDetail"]["myTeam"]["judgement"] == "WIN":
+						outcome = "Victory"
+					elif result["data"]["vsHistoryDetail"]["myTeam"]["judgement"] == "LOSE":
+						outcome = "Defeat"
+					else:
+						outcome = "Draw"
+					splatfest_match = True if result["data"]["vsHistoryDetail"]["vsMode"]["mode"] == "FEST" else False
+					if splatfest_match: # keys will exist
+						our_team_name = result["data"]["vsHistoryDetail"]["myTeam"]["festTeamName"]
+						their_team_name = result["data"]["vsHistoryDetail"]["otherTeams"][0]["festTeamName"] # no tricolor support
+						mirror_match = True if our_team_name == their_team_name else False
+					if outcome == "Victory":
+						battle_wins += 1
+						if splatfest_match and not mirror_match:
+							splatfest_wins += 1
+					elif outcome == "Defeat":
+						battle_losses += 1
+						if splatfest_match and not mirror_match:
+							splatfest_losses += 1
+					else:
+						battle_draws += 1
+						if splatfest_match and not mirror_match:
+							splatfest_draws += 1
+					if splatfest_match and mirror_match:
+						mirror_matches += 1
+
+					stagename = result["data"]["vsHistoryDetail"]["vsStage"]["name"]
+					shortname = stagename.split(" ")[-1]
+					if shortname == "d'Alfonsino": # lol franch
+						shortname = "Museum"
+					endtime = utils.epoch_time(result["data"]["vsHistoryDetail"]["playedTime"]) + \
+						result["data"]["vsHistoryDetail"]["duration"]
+					dt = datetime.datetime.fromtimestamp(endtime).strftime('%I:%M:%S %p').lstrip("0")
+
+					print(f"New battle result detected at {dt}! ({shortname}, {outcome})")
+				cached_battles.append(num)
+				post_result(result, True, isblackout, istestrun) # True = is monitoring mode
+
+	if which in ("both", "salmon"):
+		for num in reversed(salmon_results):
+			if num not in cached_jobs:
+				# get the full job data
+				result_post = requests.post(utils.GRAPHQL_URL,
+					data=utils.gen_graphql_body(utils.translate_rid["CoopHistoryDetailQuery"], "coopResultId", num),
+					headers=headbutt(),
+					cookies=dict(_gtoken=GTOKEN))
+				result = json.loads(result_post.text)
+
+				if result["data"]["coopHistoryDetail"]["jobPoint"] == None \
+				and utils.custom_key_exists("ignore_private", CONFIG_DATA):
+					pass
+				else:
+					foundany = True
+					outcome = "Clear" if result["data"]["coopHistoryDetail"]["resultWave"] == 0 else "Defeat"
+					if outcome == "Clear":
+						job_successes += 1
+					else:
+						job_failures += 1
+
+					stagename = result["data"]["coopHistoryDetail"]["coopStage"]["name"]
+					shortname = stagename.split(" ")[-1] # fine for salmon run stage names too
+					endtime = utils.epoch_time(result["data"]["coopHistoryDetail"]["playedTime"]) + \
+						result["data"]["coopHistoryDetail"]["duration"]
+
+					dt = datetime.datetime.fromtimestamp(endtime).strftime('%I:%M:%S %p').lstrip("0")
+					print(f"New job result detected at {dt}! ({shortname}, {outcome})")
+					cached_jobs.append(num)
+					post_result(result, True, isblackout, istestrun) # True = is monitoring mode
+
+	return which, cached_battles, cached_jobs, battle_wins, battle_losses, battle_draws, splatfest_wins, splatfest_losses, splatfest_draws, mirror_matches, job_successes, job_failures, foundany
+
+
+def monitor_battles(which, secs, isblackout, istestrun, skipprefetch):
+	'''Monitors SplatNet endpoint(s) for changes (new results) and uploads them (-M flag).'''
 
 	if DEBUG:
 		print(f"* monitoring mode start - calling fetch_json() w/ which={which}")
 	# ! fetch from online - no 'specific' = should all be within 'latest'
-	cached_battles, cached_jobs = fetch_json(which, separate=True, numbers_only=True, printout=True)
+	cached_battles, cached_jobs = fetch_json(which, separate=True, numbers_only=True, printout=True, skipprefetch=skipprefetch)
 	if DEBUG:
 		print("* got battle numbers")
 
@@ -964,7 +1120,7 @@ def monitor_battles(which, secs, isblackout, istestrun):
 
 	mins = str(round(float(secs)/60.0, 2))
 	mins = mins[:-2] if mins[-2:] == ".0" else mins
-	print(f"Waiting for new {utils.set_noun(which)}... (checking every {mins} minutes)")
+	print(f"Waiting for new {utils.set_noun(which)}... (checking every {mins} minute{'s' if mins != '1' else ''})")
 
 	try:
 		while True:
@@ -975,101 +1131,63 @@ def monitor_battles(which, secs, isblackout, istestrun):
 				sys.stdout.write("\r")
 
 			print("Checking for new results...", end='\r')
-			# ! fetch from online
-			ink_results, salmon_results = fetch_json(which, separate=True, numbers_only=True) # only numbers or it'd take a long time
-
-			if which in ("both", "ink"):
-				for num in reversed(ink_results):
-					if num not in cached_battles:
-						# get the full battle data
-						result_post = requests.post(utils.GRAPHQL_URL,
-							data=utils.gen_graphql_body(utils.translate_rid["VsHistoryDetailQuery"], "vsResultId", num),
-							headers=headbutt(),
-							cookies=dict(_gtoken=GTOKEN))
-						result = json.loads(result_post.text)
-
-						if result["data"]["vsHistoryDetail"]["vsMode"]["mode"] == "PRIVATE" \
-						and utils.custom_key_exists("ignore_private", CONFIG_DATA):
-							pass
-						else:
-							if result["data"]["vsHistoryDetail"]["myTeam"]["judgement"] == "WIN":
-								outcome = "Victory"
-							elif result["data"]["vsHistoryDetail"]["myTeam"]["judgement"] == "LOSE":
-								outcome = "Defeat"
-							else:
-								outcome = "Draw"
-							splatfest_match = True if result["data"]["vsHistoryDetail"]["vsMode"]["mode"] == "FEST" else False
-							if splatfest_match: # keys will exist
-								our_team_name = result["data"]["vsHistoryDetail"]["myTeam"]["festTeamName"]
-								their_team_name = result["data"]["vsHistoryDetail"]["otherTeams"][0]["festTeamName"] # no tricolor support
-								mirror_match = True if our_team_name == their_team_name else False
-							if outcome == "Victory":
-								battle_wins += 1
-								if splatfest_match and not mirror_match:
-									splatfest_wins += 1
-							elif outcome == "Defeat":
-								battle_losses += 1
-								if splatfest_match and not mirror_match:
-									splatfest_losses += 1
-							else:
-								battle_draws += 1
-								if splatfest_match and not mirror_match:
-									splatfest_draws += 1
-							if splatfest_match and mirror_match:
-								mirror_matches += 1
-
-							stagename = result["data"]["vsHistoryDetail"]["vsStage"]["name"]
-							shortname = stagename.split(" ")[-1]
-							endtime = utils.epoch_time(result["data"]["vsHistoryDetail"]["playedTime"]) + \
-								result["data"]["vsHistoryDetail"]["duration"]
-							dt = datetime.datetime.fromtimestamp(endtime).strftime('%I:%M:%S %p').lstrip("0")
-
-							print(f"New battle result detected at {dt}! ({shortname}, {outcome})")
-						cached_battles.append(num)
-						post_result(result, True, isblackout, istestrun) # True = is monitoring mode
-
-			if which in ("salmon"): # TODO - add in "both" when we have SR support
-				for num in reversed(salmon_results):
-					if num not in cached_jobs:
-						# get the full job data
-						result_post = requests.post(utils.GRAPHQL_URL,
-							data=utils.gen_graphql_body(utils.translate_rid["CoopHistoryDetailQuery"], "coopResultId", num),
-							headers=headbutt(),
-							cookies=dict(_gtoken=GTOKEN))
-						result = json.loads(result_post.text)
-
-						if result["data"]["coopHistoryDetail"]["jobScore"] == None \
-						and utils.custom_key_exists("ignore_private", CONFIG_DATA):
-							pass
-						else:
-							outcome = "Clear" if result["data"]["coopHistoryDetail"]["resultWave"] == 0 else "Defeat"
-							if outcome == "Clear":
-								job_successes += 1
-							else:
-								job_failures += 1
-
-							stagename = result["data"]["coopHistoryDetail"]["coopStage"]["name"]
-							shortname = stagename.split(" ")[-1] # fine for salmon run stage names too
-							endtime = utils.epoch_time(result["data"]["coopHistoryDetail"]["playedTime"]) + \
-								result["data"]["coopHistoryDetail"]["duration"]
-
-							dt = datetime.datetime.fromtimestamp(endtime).strftime('%I:%M:%S %p').lstrip("0")
-							print(f"New job result detected at {dt}! ({shortname}, {outcome})")
-							cached_jobs.append(num)
-							post_result(result, True, isblackout, istestrun) # True = is monitoring mode
+			input_params = [
+				which,
+				cached_battles, cached_jobs,
+				battle_wins, battle_losses, battle_draws,
+				splatfest_wins, splatfest_losses, splatfest_draws, mirror_matches,
+				job_successes, job_failures,
+				isblackout, istestrun
+			]
+			which, cached_battles, cached_jobs, battle_wins, battle_losses, battle_draws, splatfest_wins, splatfest_losses, splatfest_draws, mirror_matches, job_successes, job_failures, foundany = check_for_new_results(*input_params)
 
 	except KeyboardInterrupt:
-		# print(f"\nChecking to see if there are unuploaded {utils.set_noun(which)} before exiting...") # TODO
+		print(f"\n\nChecking to see if there are unuploaded {utils.set_noun(which)} before exiting...")
 
-		# check LatestBattleHistoriesQuery against https://stat.ink/api/v3/s3s/uuid-list
+		input_params = [
+			which,
+			cached_battles, cached_jobs,
+			battle_wins, battle_losses, battle_draws,
+			splatfest_wins, splatfest_losses, splatfest_draws, mirror_matches,
+			job_successes, job_failures,
+			isblackout, istestrun
+		]
+		which, cached_battles, cached_jobs, battle_wins, battle_losses, battle_draws, splatfest_wins, splatfest_losses, splatfest_draws, mirror_matches, job_successes, job_failures, foundany = check_for_new_results(*input_params)
 
-		# if SR:
-		# check CoopHistoryQuery
-		# update_salmon_profile()
+		noun = utils.set_noun(which)
+		if foundany:
+			print(f"Successfully uploaded remaining {noun}.")
+		else:
+			print(f"No remaining {noun} found.")
 
-		# show job/battle/splatfest_wins, etc.
-		print("\n\nChecking for unuploaded results before exiting is not yet implemented.")
-		print("Please run s3s again with " + '\033[91m' + "-r" + '\033[0m' + " to get these battles.")
+		# SR TODO - update_salmon_profile()
+
+		print("\n== SESSION REPORT ==")
+		if which in ("ink", "both"):
+			if battle_draws == 0:
+				print(f"Battles: {battle_wins} win{'' if battle_wins == 1 else 's'} and " \
+					f"{battle_losses} loss{'' if battle_losses == 1 else 'es'}.")
+			else:
+				print(f"Battles: {battle_wins} win{'' if battle_wins == 1 else 's'}, " \
+					f"{battle_losses} loss{'' if battle_losses == 1 else 'es'}, and " \
+					f"{battle_draws} draw{'' if battle_draws == 1 else 's'}.")
+
+			if splatfest_wins + splatfest_losses + splatfest_draws > 0:
+				if splatfest_draws == 0:
+					print(f"Splatfest: {splatfest_wins} win{'' if splatfest_wins == 1 else 's'} and " \
+						f"{splatfest_losses} loss{'' if splatfest_losses == 1 else 'es'} against the other Splatfest team.")
+				else:
+					print(f"Splatfest: {splatfest_wins} win{'' if splatfest_wins == 1 else 's'}, " \
+						f"{splatfest_losses} loss{'' if splatfest_losses == 1 else 'es'}, and " \
+						f"{splatfest_draws} draw{'' if splatfest_draws == 1 else 's'} against the other Splatfest team.")
+
+				print(f"{mirror_matches} mirror match{'' if mirror_matches == 1 else 'es'} against your Splatfest team.")
+
+		# SR TODO
+		# if which in ("salmon", "both"):
+		# 	print(f"Salmon Run: {job_successes} success{'' if job_successes == 1 else 'es'} and " \
+		# 		f"{job_failures} failure{'' if job_failures == 1 else 's'}.")
+
 		print("Bye!")
 
 
@@ -1093,6 +1211,74 @@ class SquidProgress:
 		sys.stdout.flush()
 
 
+def export_seed_json(skipprefetch=False):
+	'''Export a JSON file for use with Lean's seed checker at https://leanny.github.io/splat3seedchecker/.'''
+
+	try:
+		import mmh3
+	except ModuleNotFoundError:
+		print("This function requires a Python module you don't have installed. " \
+			"Please run " + '`\033[91m' + "pip install -r requirements.txt" + '\033[0m`' + " and try again.")
+		sys.exit(1)
+
+	if not skipprefetch:
+		prefetch_checks(printout=True)
+
+	sha = utils.translate_rid["MyOutfitCommonDataEquipmentsQuery"]
+	outfit_post = requests.post(utils.GRAPHQL_URL, data=utils.gen_graphql_body(sha),
+		headers=headbutt(), cookies=dict(_gtoken=GTOKEN))
+
+	sha = utils.translate_rid["LatestBattleHistoriesQuery"]
+	history_post = requests.post(utils.GRAPHQL_URL, data=utils.gen_graphql_body(sha),
+		headers=headbutt(), cookies=dict(_gtoken=GTOKEN))
+
+	if outfit_post.status_code != 200 or history_post.status_code != 200:
+		print("Could not reach SplatNet 3. Exiting.")
+		sys.exit(1)
+	try:
+		outfit = json.loads(outfit_post.text)
+		history = json.loads(history_post.text)
+	except:
+		print("Ill-formatted JSON file received. Exiting.")
+		sys.exit(1)
+
+	try:
+		pid = history["data"]["latestBattleHistories"]["historyGroupsOnlyFirst"]["nodes"][0]["historyDetails"]["nodes"][0]["player"]["id"]
+		# VsPlayer-u-<20 char long player id>:RECENT:<YYYYMMDD>T<HHMMSS>_<UUID>:u-<same player id as earlier>
+		s = utils.b64d(pid)
+		r = s.split(":")[-1]
+	except KeyError: # no recent battles (mr. grizz is pleased)
+		try:
+			sha = utils.translate_rid["CoopHistoryQuery"]
+			history_post = requests.post(utils.GRAPHQL_URL, data=utils.gen_graphql_body(sha),
+				headers=headbutt(), cookies=dict(_gtoken=GTOKEN))
+
+			if history_post.status_code != 200:
+				print("Could not reach SplatNet 3. Exiting.")
+				sys.exit(1)
+			try:
+				history = json.loads(history_post.text)
+			except:
+				print("Ill-formatted JSON file received. Exiting.")
+				sys.exit(1)
+
+			pid = history["data"]["coopResult"]["historyGroupsOnlyFirst"]["nodes"][0]["historyDetails"]["nodes"][0]["id"]
+			# CoopHistoryDetail-u-<20 char long player id>:<YYYYMMDD>T<HHMMSS>_<UUID>
+			s = utils.b64d(pid)
+			r = s.split(":")[0].replace("CoopHistoryDetail-", "")
+		except KeyError:
+			r = ""
+
+	h = mmh3.hash(r)&0xFFFFFFFF # make positive
+	key = base64.b64encode(bytes([k^(h&0xFF) for k in bytes(r, "utf-8")]))
+	t = int(time.time())
+
+	with open(os.path.join(os.getcwd(), f"gear_{t}.json"), "x") as fout:
+		json.dump({"key": key.decode("utf-8"), "h": h, "timestamp": t, "gear": outfit}, fout)
+
+	print(f"gear_{t}.json has been exported.")
+
+
 def parse_arguments():
 	'''Setup for command-line options.'''
 
@@ -1103,17 +1289,20 @@ def parse_arguments():
 	parser.add_argument("-r", required=False, action="store_true",
 		help="retroactively post unuploaded battles/jobs")
 	srgroup.add_argument("-nsr", required=False, action="store_true",
-						help="do not check for Salmon Run jobs")
+		help="do not check for Salmon Run jobs")
 	srgroup.add_argument("-osr", required=False, action="store_true",
-						help="only check for Salmon Run jobs")
-	# parser.add_argument("--blackout", required=False, action="store_true",
-		# help="black out names on scoreboard result images")
+		help="only check for Salmon Run jobs")
+	parser.add_argument("--blackout", required=False, action="store_true",
+		help="remove player names from uploaded scoreboard data")
 	parser.add_argument("-o", required=False, action="store_true",
 		help="export all possible results to local files")
 	parser.add_argument("-i", dest="file", nargs=2, required=False,
 		help="upload local results; use `-i results.json overview.json`")
 	parser.add_argument("-t", required=False, action="store_true",
 		help="dry run for testing (won't post to stat.ink)")
+	parser.add_argument("--getseed", required=False, action="store_true",
+		help="export JSON for gear & Shell-Out Machine seed checker")
+	parser.add_argument("--skipprefetch", required=False, action="store_true", help=argparse.SUPPRESS)
 	return parser.parse_args()
 
 
@@ -1137,21 +1326,30 @@ def main():
 	check_old   = parser_result.r
 	only_ink    = parser_result.nsr # ink battles ONLY
 	only_salmon = parser_result.osr # salmon run ONLY
-	# blackout    = parser_result.blackout
-	blackout = False
+	blackout    = parser_result.blackout
+	getseed     = parser_result.getseed
 
 	# testing/dev stuff
-	test_run  = parser_result.t
-	filenames = parser_result.file # intended for results.json AND overview.json
-	outfile   = parser_result.o # output to local files
+	test_run     = parser_result.t            # send to stat.ink as dry run
+	filenames    = parser_result.file         # intended for results.json AND overview.json
+	outfile      = parser_result.o            # output to local files
+	skipprefetch = parser_result.skipprefetch # skip prefetch checks to ensure token validity
 
 	# i/o checks
 	############
-	if only_ink and only_salmon:
+	if getseed and len(sys.argv) > 2 and "--skipprefetch" not in sys.argv:
+		print("Cannot use --getseed with other arguments. Exiting.")
+		sys.exit(0)
+
+	elif getseed:
+		export_seed_json(skipprefetch)
+		sys.exit(0)
+
+	elif only_ink and only_salmon:
 		print("That doesn't make any sense! :) Exiting.")
 		sys.exit(0)
 
-	elif outfile and len(sys.argv) > 2:
+	elif outfile and len(sys.argv) > 2 and "--skipprefetch" not in sys.argv:
 		print("Cannot use -o with other arguments. Exiting.")
 		sys.exit(0)
 
@@ -1169,10 +1367,11 @@ def main():
 			print("Minimum number of seconds in monitoring mode is 60. Exiting.")
 			sys.exit(0)
 
-	# export results to file: -o
-	############################
+	# export results to file: -o flag
+	#################################
 	if outfile:
-		prefetch_checks(printout=True)
+		if not skipprefetch:
+			prefetch_checks(printout=True)
 		print("Fetching your JSON files to export locally. This might take a while...")
 		# fetch_json() calls prefetch_checks() to gen or check tokens
 		parents, results, coop_results = fetch_json("both", separate=True, exportall=True, specific=True, skipprefetch=True)
@@ -1201,8 +1400,8 @@ def main():
 		print("\nHave fun playing Splatoon 3! :) Bye!")
 		sys.exit(0)
 
-	# manual json upload: -i
-	########################
+	# manual json upload: -i flag
+	#############################
 	if filenames: # 2 files in list
 		if os.path.basename(filenames[0]) != "results.json" or os.path.basename(filenames[1]) != "overview.json":
 			print("Must use the format " \
@@ -1258,21 +1457,16 @@ def main():
 	#############
 	which = "ink" if only_ink else "salmon" if only_salmon else "both"
 
-	# ---
-	# TEMP.
-	if only_salmon:
-		print("stat.ink does not support uploading Salmon Run data at this time. Exiting.")
-		sys.exit(0)
-	# ---
-
 	if which in ("salmon", "both"):
 		update_salmon_profile()
 
 	if check_old:
-		check_if_missing(which, True if secs != -1 else False, blackout, test_run)
+		check_if_missing(which, blackout, test_run, skipprefetch) # monitoring mode hasn't begun yet
+		print()
 
 	if secs != -1: # monitoring mode
-		monitor_battles(which, secs, blackout, test_run)
+		skipprefetch = True if skipprefetch or check_old else False
+		monitor_battles(which, secs, blackout, test_run, skipprefetch) # skip prefetch checks if already done in -r
 
 	elif not check_old: # regular mode (no -M) and did not just use -r
 		if which == "both":
@@ -1283,13 +1477,17 @@ def main():
 		print("Pulling data from online...")
 
 		# ! fetch from online
-		results = fetch_json(which, numbers_only=True, printout=True)
+		try:
+			results = fetch_json(which, numbers_only=True, printout=True, skipprefetch=skipprefetch)
+		except json.decoder.JSONDecodeError:
+			print("\nCould not fetch results JSON. Are your tokens invalid?")
+			sys.exit(1)
 
 		results = results[:n] # limit to n uploads
 		results.reverse() # sort from oldest to newest
 		noun = utils.set_noun(which)
 		for hash in results:
-			fetch_and_upload_single_result(hash, noun, False, blackout, test_run) # monitoring mode = False
+			fetch_and_upload_single_result(hash, noun, blackout, test_run) # not monitoring mode
 
 
 if __name__ == "__main__":

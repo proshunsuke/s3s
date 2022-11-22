@@ -2,7 +2,7 @@
 # https://github.com/frozenpandaman/s3s
 # License: GPLv3
 
-import base64, hashlib, json, os, re, sys
+import base64, hashlib, json, os, re, sys, urllib
 import requests
 from bs4 import BeautifulSoup
 
@@ -10,7 +10,7 @@ S3S_VERSION           = "unknown"
 NSOAPP_VERSION        = "unknown"
 NSOAPP_VER_FALLBACK   = "2.3.1"
 WEB_VIEW_VERSION      = "unknown"
-WEB_VIEW_VER_FALLBACK = "1.0.0-5644e7a2" # fallback for current splatnet 3 ver
+WEB_VIEW_VER_FALLBACK = "1.0.0-d7b95a79" # fallback for current splatnet 3 ver
 SPLATNET3_URL         = "https://api.lp1.av5ja.srv.nintendo.net"
 
 # functions in this file & call stack:
@@ -149,14 +149,10 @@ def log_in(ver, app_user_agent):
 		'theme':                               'login_form'
 	}
 
-	url = 'https://accounts.nintendo.com/connect/1.0.0/authorize'
-	r = session.get(url, headers=app_head, params=body)
-
-	post_login = r.history[0].url
-
-	print("\nMake sure you have fully read the \"Token generation\" section of the readme before proceeding. To manually input a token instead, enter \"skip\" at the prompt below.")
+	print("\nMake sure you have read the \"Token generation\" section of the readme before proceeding. To manually input your tokens instead, enter \"skip\" at the prompt below.")
 	print("\nNavigate to this URL in your browser:")
-	print(post_login)
+	print(f'https://accounts.nintendo.com/connect/1.0.0/authorize?{urllib.parse.urlencode(body)}')
+
 	print("Log in, right click the \"Select this account\" button, copy the link address, and paste it below:")
 	while True:
 		try:
@@ -419,7 +415,7 @@ def call_f_api(id_token, step, f_gen_url):
 		}
 		api_body = {
 			'token':       id_token,
-			'hashMethod':  step
+			'hash_method':  step
 		}
 		api_response = requests.post(f_gen_url, data=json.dumps(api_body), headers=api_head)
 		resp = json.loads(api_response.text)
