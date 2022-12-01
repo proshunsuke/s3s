@@ -1082,7 +1082,11 @@ def post_result(data, ismonitoring, isblackout, istestrun, overview_data=None):
 			print(f"* time uploaded: {time_uploaded}; time now: {time_now}")
 
 		if postbattle.status_code != 201: # Created (or already exists)
-			print(f"Error uploading {utils.set_noun(which)[:-1]}. Message from server:")
+			print(f"Error uploading {utils.set_noun(which)[:-1]}.")
+			detail_type = "vsHistoryDetail" if which == "ink" else "coopHistoryDetail"
+			result_id = results[i]["data"][detail_type]["id"]
+			print(f"{utils.set_noun(which)[:-1].capitalize()} ID: {result_id}")
+			print("Message from server:")
 			print(postbattle.content.decode('utf-8'))
 		elif time_uploaded <= time_now - 5: # give some leeway
 			print(f"{utils.set_noun(which)[:-1].capitalize()} already uploaded - {headerloc}")
@@ -1307,7 +1311,7 @@ def check_for_new_results(which, cached_battles, cached_jobs, battle_wins, battl
 					foundany = True
 					if result["data"]["vsHistoryDetail"]["myTeam"]["judgement"] == "WIN":
 						outcome = "Victory"
-					elif result["data"]["vsHistoryDetail"]["myTeam"]["judgement"] == "LOSE":
+					elif result["data"]["vsHistoryDetail"]["myTeam"]["judgement"] in ("LOSE", "DEEMED_LOSE", "EXEMPTED_LOSE"):
 						outcome = "Defeat"
 					else:
 						outcome = "Draw"
