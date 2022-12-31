@@ -1,4 +1,4 @@
-name: Uploads Splatoon 3 battle data
+name: Uploads Splatoon 3 battle data and upload gear data
 
 on:
   schedule:
@@ -33,3 +33,11 @@ jobs:
       - name: Uploads Splatoon 3 battle data
         run: |
           python s3s.py -r
+      - name: Export a gear data file
+        run: |
+          python s3s.py --getseed
+      - name: Upload a gear data file
+        uses: actions/upload-artifact@v3
+        with:
+          name: gear.json
+          path: gear_*.json
