@@ -1,4 +1,4 @@
-name: Export JSON
+name: Export Seed JSON
 
 on:
   workflow_dispatch:
@@ -56,14 +56,14 @@ jobs:
               f.write("\n")
           PY
 
-      - name: Export JSON
-        run: python s3s.py -o --norefresh 1
+      - name: Export seed JSON
+        run: python s3s.py --getseed --norefresh 1
 
-      - name: Upload JSON artifact
+      - name: Upload seed JSON artifact
         uses: actions/upload-artifact@v4
         with:
-          name: s3s-json-export-${{ github.run_id }}
-          path: exports/
+          name: splat3seedchecker-json-${{ github.run_id }}
+          path: gear_*.json
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
