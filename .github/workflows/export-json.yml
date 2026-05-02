@@ -1,0 +1,72 @@
+name: Export JSON
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "Artifact retention days"
+        required: true
+        type: number
+        default: 7
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-json
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Create config
+        env:
+          S3S_CONFIG_JSON: ${{ secrets.S3S_CONFIG_JSON }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          config_json = os.environ.get("S3S_CONFIG_JSON", "").strip()
+          if not config_json:
+              sys.exit("Set the S3S_CONFIG_JSON secret.")
+
+          config = json.loads(config_json)
+
+          config["api_key"] = config.get("api_key") or "skip"
+          config["session_token"] = config.get("session_token") or "skip"
+
+          with open("config.txt", "w", encoding="utf-8") as f:
+              json.dump(config, f, indent=4, ensure_ascii=False)
+              f.write("\n")
+          PY
+
+      - name: Export JSON
+        run: python s3s.py -o --norefresh 1
+
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3s-json-export-${{ github.run_id }}
+          path: exports/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Remove runtime config
+        if: always()
+        run: rm -f config.txt
