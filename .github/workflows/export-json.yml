@@ -35,21 +35,25 @@ jobs:
 
       - name: Create config
         env:
-          S3S_CONFIG_JSON: ${{ secrets.S3S_CONFIG_JSON }}
+          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
         run: |
           python - <<'PY'
           import json
           import os
           import sys
 
-          config_json = os.environ.get("S3S_CONFIG_JSON", "").strip()
-          if not config_json:
-              sys.exit("Set the S3S_CONFIG_JSON secret.")
+          session_token = os.environ.get("SESSION_TOKEN", "").strip()
+          if not session_token:
+              sys.exit("Set the SESSION_TOKEN secret.")
 
-          config = json.loads(config_json)
-
-          config["api_key"] = config.get("api_key") or "skip"
-          config["session_token"] = config.get("session_token") or "skip"
+          config = {
+              "api_key": "skip",
+              "acc_loc": "en-US|US",
+              "gtoken": "",
+              "bullettoken": "",
+              "session_token": session_token,
+              "f_gen": "https://api.imink.app/f",
+          }
 
           with open("config.txt", "w", encoding="utf-8") as f:
               json.dump(config, f, indent=4, ensure_ascii=False)
@@ -57,7 +61,7 @@ jobs:
           PY
 
       - name: Export seed JSON
-        run: python s3s.py --getseed --norefresh 1
+        run: python s3s.py --getseed
 
       - name: Upload seed JSON artifact
         uses: actions/upload-artifact@v4
